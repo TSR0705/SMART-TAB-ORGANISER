@@ -241,7 +241,17 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ## 👥 Credits
 
-Created by [Your Name] and contributors.
+Built with ❤️ 
+---
+## 👤 About the Creator
+
+<div align="center">
+  <img src="https://avatars.githubusercontent.com/TSR0705" alt="Tanmay Singh" width="100" style="border-radius:50%;" />
+  <h3>Tanmay Singh</h3>
+<p>
+  <em>Rising Full-Stack Innovator Shaping Next-Gen Web Experiences</em><br/>
+  Cloud-First Mindset | UI/UX-Driven | JavaScript at the Core
+</p>
 
 Special thanks to:
 - [Sentence Transformers](https://www.sbert.net/) for excellent embedding models
