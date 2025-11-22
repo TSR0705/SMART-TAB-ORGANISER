@@ -12,9 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from cluster import cluster_tabs
-from labeler import generate_cluster_name
-from schemas import ClusterRequest, ClusterResponse, ClusterItem, Tab
+from app.cluster import cluster_tabs
+from app.labeler import generate_cluster_name
+from app.schemas import ClusterRequest, ClusterResponse, ClusterItem, Tab
 
 
 # -----------------------------
