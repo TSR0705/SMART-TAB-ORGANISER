@@ -75,7 +75,7 @@ async def cluster_tabs_endpoint(request: ClusterRequest) -> ClusterResponse:
         tabs_normalized = [
             {
                 "title": tab.title.strip(),
-                "url": str(tab.url).strip(),
+                "url": str(tab.url),
             }
             for tab in request.tabs
         ]

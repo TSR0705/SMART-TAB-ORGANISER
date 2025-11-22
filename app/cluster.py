@@ -46,7 +46,7 @@ def preprocess_tabs(tabs: List[dict]) -> List[dict]:
     normalized = []
     for t in tabs:
         title = (t.get("title") or "").strip()
-        url = (t.get("url") or "").strip()
+        url = str(t.get("url") or "").strip()
         url_norm = normalize_url(url)
         domain = domain_from_url(url_norm)
         normalized.append({
