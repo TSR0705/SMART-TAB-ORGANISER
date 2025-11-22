@@ -2,7 +2,7 @@
 FastAPI backend for Tab Clustering service.
 
 Provides REST endpoints for clustering browser tabs using AI embeddings.
-Now hardened, validated, normalized, and production-ready.
+
 """
 
 import os

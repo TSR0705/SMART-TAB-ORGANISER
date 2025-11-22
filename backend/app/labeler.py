@@ -1,6 +1,5 @@
 """
-Hybrid labeler: TF-IDF + domain mapping + keyword heuristics + fallback.
-Designed to be offline and fast.
+Hybrid labeler for tab clustering.
 """
 
 from typing import List, Dict
@@ -11,7 +10,7 @@ from urllib.parse import urlparse
 
 # -------------------------
 # Category examples (expanded)
-# Add or tune these as you test on real tabs.
+
 # -------------------------
 CATEGORY_EXAMPLES: Dict[str, List[str]] = {
     "Programming & Dev": [
@@ -59,7 +58,7 @@ CATEGORY_EXAMPLES: Dict[str, List[str]] = {
 
 # -------------------------
 # Domain -> Category quick map
-# Expand with common domains you see.
+
 # -------------------------
 DOMAIN_CATEGORY_MAP = {
     "github.com": "Programming & Dev",
@@ -153,11 +152,7 @@ def _keyword_fallback(text: str) -> str:
 
 def generate_cluster_name(titles: List[str], domains: List[str] = None) -> str:
     """
-    Hybrid routine:
-      1. domain quick-map if available and unanimous -> return
-      2. TF-IDF similarity against examples -> if strong, return
-      3. keyword fallback -> return
-      4. final fallback -> Miscellaneous
+    Generate cluster name using multiple strategies.
     """
     _build_tfidf()
     titles_clean = _preprocess_titles(titles)

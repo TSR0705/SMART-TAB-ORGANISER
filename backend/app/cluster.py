@@ -1,15 +1,6 @@
 """
 Advanced clustering pipeline for AI Tab Clusterer.
 
-Pipeline:
-1. Normalize titles & URLs
-2. Create MiniLM embeddings (loaded once)
-3. Run KMeans for a stable first-pass clustering
-4. Identify small / noisy clusters and reassign using:
-   - DBSCAN for local structure (optional)
-   - nearest-cluster by cosine similarity (cheap & robust)
-5. Merge near-duplicate clusters
-6. Produce cluster dicts with id, tabs (no labels) — labels come from labeler.py
 """
 
 from typing import List, Optional, Tuple, Dict
@@ -32,7 +23,7 @@ DBSCAN_MIN_SAMPLES = 2
 
 
 def normalize_url(url: str) -> str:
-    """Normalize URL: remove query + fragment, lowercase, strip trailing slashes."""
+    """Normalize URL by removing query parameters and fragments."""
     try:
         p = urlparse(url)
         # remove query and fragment
@@ -51,7 +42,7 @@ def domain_from_url(url: str) -> str:
 
 
 def preprocess_tabs(tabs: List[dict]) -> List[dict]:
-    """Return tabs with normalized titles/urls and helper fields."""
+    """Normalize tab data for processing."""
     normalized = []
     for t in tabs:
         title = (t.get("title") or "").strip()
@@ -75,8 +66,7 @@ def _auto_n_clusters(n_tabs: int) -> int:
 
 def _merge_similar_clusters(cluster_embeddings: List[np.ndarray], merge_thresh: float = 0.85) -> List[int]:
     """
-    Simple greedy merge: if two cluster centroids cosine similarity > merge_thresh,
-    merge them. Return mapping old_cluster_idx -> new_cluster_idx.
+    Merge similar clusters based on cosine similarity threshold.
     """
     if len(cluster_embeddings) <= 1:
         return list(range(len(cluster_embeddings)))
@@ -116,7 +106,7 @@ def _merge_similar_clusters(cluster_embeddings: List[np.ndarray], merge_thresh: 
 
 def cluster_tabs(tabs: List[dict], n_clusters: Optional[int] = None) -> List[dict]:
     """
-    Main entry: input list of {title,url}, returns clusters = [{id, tabs:[{title,url,...}]}].
+    Main clustering function that processes tabs and returns clustered groups.
     """
     if not tabs:
         raise ValueError("Tabs list cannot be empty")
