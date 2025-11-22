@@ -124,7 +124,7 @@ def cluster_tabs(tabs: List[dict], n_clusters: Optional[int] = None) -> List[dic
     if n_clusters is None:
         n_clusters = _auto_n_clusters(len(tabs_norm))
 
-    # First-pass: KMeans (fast + stable)
+    # First-pass: KMeans clustering
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     labels = kmeans.fit_predict(embeddings)
 
