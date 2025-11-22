@@ -1,7 +1,7 @@
 """
 FastAPI backend for Tab Clustering service.
 
-Provides REST endpoints for clustering browser tabs using AI embeddings.
+Provides REST endpoints for clustering browser tabs.
 
 """
 
@@ -12,9 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from app.cluster import cluster_tabs
-from app.labeler import generate_cluster_name
-from app.schemas import ClusterRequest, ClusterResponse, ClusterItem, Tab
+from cluster import cluster_tabs
+from labeler import generate_cluster_name
+from schemas import ClusterRequest, ClusterResponse, ClusterItem, Tab
 
 
 # -----------------------------
@@ -22,7 +22,7 @@ from app.schemas import ClusterRequest, ClusterResponse, ClusterItem, Tab
 # -----------------------------
 app = FastAPI(
     title="AI Tab Clusterer",
-    description="Cluster browser tabs into semantic groups using AI embeddings + offline TF-IDF labeler",
+    description="Cluster browser tabs into semantic groups",
     version="3.0.0",
 )
 
@@ -68,7 +68,7 @@ async def health_check():
 @app.post("/cluster", response_model=ClusterResponse, tags=["clustering"])
 async def cluster_tabs_endpoint(request: ClusterRequest) -> ClusterResponse:
     """
-    Cluster the provided tabs into semantic groups and assign offline labels.
+    Cluster the provided tabs into semantic groups.
     """
     try:
         # Normalize input

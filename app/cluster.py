@@ -1,5 +1,5 @@
 """
-Advanced clustering pipeline for AI Tab Clusterer.
+Tab clustering functionality for AI Tab Clusterer.
 
 """
 
@@ -18,7 +18,7 @@ embedder = SentenceTransformer("all-MiniLM-L6-v2")
 MAX_CLUSTERS = 8
 MIN_CLUSTER_SIZE = 2      # clusters smaller than this are considered small/noise
 REASSIGN_SIMILARITY_THRESH = 0.65  # threshold to glue small clusters to nearest
-DBSCAN_EPS = 0.6          # eps for DBSCAN (on normalized embeddings)
+DBSCAN_EPS = 0.6          # eps for DBSCAN
 DBSCAN_MIN_SAMPLES = 2
 
 
@@ -141,7 +141,7 @@ def cluster_tabs(tabs: List[dict], n_clusters: Optional[int] = None) -> List[dic
         centroids.append(cent)
         centroid_cluster_ids.append(c_id)
 
-    # Merge very similar clusters (greedy)
+    # Merge very similar clusters
     merge_map = _merge_similar_clusters(centroids, merge_thresh=0.90)
     # Build merged clusters mapping: new_id -> list of member original cluster ids
     merged = {}

@@ -1,5 +1,5 @@
 """
-Hybrid labeler for tab clustering.
+Labeler for tab clustering.
 """
 
 from typing import List, Dict
