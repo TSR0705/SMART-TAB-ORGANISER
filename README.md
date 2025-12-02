@@ -5,11 +5,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/your-username/smart-tab-organizer/releases">
-    <img src="https://img.shields.io/github/v/release/your-username/smart-tab-organizer?style=flat-square" alt="GitHub release">
+  <a href="https://github.com/tsr0705/smart-tab-organizer/releases">
+    <img src="https://img.shields.io/github/v/release/tsr0705/smart-tab-organizer?style=flat-square" alt="GitHub release">
   </a>
-  <a href="https://github.com/your-username/smart-tab-organizer/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/your-username/smart-tab-organizer?style=flat-square" alt="License">
+  <a href="https://github.com/tsr0705/smart-tab-organizer/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/tsr0705/smart-tab-organizer?style=flat-square" alt="License">
   </a>
   <a href="https://railway.app/">
     <img src="https://img.shields.io/badge/deployment-railway-blue?style=flat-square&logo=railway" alt="Deployment - Railway">
