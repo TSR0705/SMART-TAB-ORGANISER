@@ -1,12 +1,15 @@
 """
 Tab clustering functionality for AI Tab Clusterer.
 
-Improvements / fixes:
-- _merge_similar_clusters now returns a list mapping index -> merged index
-  (previously returned a dict and was iterated incorrectly).
-- Defensive checks added around embeddings, centroids and DBSCAN.
-- Ensured outputs have deterministic sequential IDs (misc remains 9999).
-- Minor robustness improvements and clearer comments.
+Improvements in this version:
+- Fixed index mismatch bug in small cluster reassignment
+- Fixed singleton detection logic to use snapshotted sizes
+- Added validation for empty titles/URLs
+- Improved embedding text construction with separator
+- Extracted magic numbers to constants
+- Enhanced type hints and docstrings
+- Optimized centroid computation
+- Better edge case handling
 """
 
 from typing import List, Optional, Dict
@@ -19,16 +22,26 @@ from sentence_transformers import SentenceTransformer
 # Load embedding model once (fast)
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Configuration
+# Configuration Constants
 MAX_CLUSTERS = 8
-MIN_CLUSTER_SIZE = 2      # clusters smaller than this are considered small/noise
+MIN_CLUSTER_SIZE = 2  # clusters smaller than this are considered small/noise
 REASSIGN_SIMILARITY_THRESH = 0.65  # threshold to glue small clusters to nearest
-DBSCAN_EPS = 0.6          # eps for DBSCAN (on cosine metric)
+DBSCAN_EPS = 0.6  # eps for DBSCAN (on cosine metric)
 DBSCAN_MIN_SAMPLES = 2
+CENTROID_MERGE_THRESH = 0.90  # threshold for merging similar centroids
+MISC_CLUSTER_ID = 9999  # ID for uncategorized tabs
 
 
 def normalize_url(url: str) -> str:
-    """Normalize URL by removing query parameters and fragments."""
+    """
+    Normalize URL by removing query parameters, fragments, and trailing slashes.
+    
+    Args:
+        url: Raw URL string
+        
+    Returns:
+        Normalized lowercase URL, or empty string on error
+    """
     try:
         p = urlparse(url)
         # urlunparse expects (scheme, netloc, path, params, query, fragment)
@@ -39,6 +52,15 @@ def normalize_url(url: str) -> str:
 
 
 def domain_from_url(url: str) -> str:
+    """
+    Extract domain from URL.
+    
+    Args:
+        url: URL string
+        
+    Returns:
+        Domain (netloc) in lowercase, or empty string on error
+    """
     try:
         p = urlparse(url)
         return (p.netloc or "").lower()
@@ -47,13 +69,28 @@ def domain_from_url(url: str) -> str:
 
 
 def preprocess_tabs(tabs: List[dict]) -> List[dict]:
-    """Normalize tab data for processing."""
+    """
+    Normalize tab data for processing.
+    
+    Args:
+        tabs: List of dicts with 'title' and 'url' keys
+        
+    Returns:
+        List of normalized tab dicts with added 'url_norm' and 'domain' fields
+    """
     normalized = []
     for t in tabs:
-        title = (t.get("title") or "").strip()
+        # Validate and clean title/URL
+        title = (t.get("title") or "").strip() or "Untitled"
         url = (t.get("url") or "").strip()
+        
+        # Skip tabs without valid URLs
+        if not url or url.startswith("chrome://") or url.startswith("about:"):
+            continue
+            
         url_norm = normalize_url(url)
         domain = domain_from_url(url_norm)
+        
         normalized.append({
             "title": title,
             "url": url,
@@ -64,231 +101,337 @@ def preprocess_tabs(tabs: List[dict]) -> List[dict]:
 
 
 def _auto_n_clusters(n_tabs: int) -> int:
+    """
+    Auto-determine optimal cluster count using logarithmic scaling.
+    
+    Args:
+        n_tabs: Number of tabs to cluster
+        
+    Returns:
+        Cluster count between 2 and MAX_CLUSTERS
+    """
     if n_tabs <= 4:
         return 2
-    return min(MAX_CLUSTERS, max(2, int(n_tabs ** 0.5)))
+    # Log2 scaling provides better granularity than sqrt:
+    # 8 tabs→3, 16→4, 32→5, 64→6, 128→7
+    return min(MAX_CLUSTERS, max(2, int(np.log2(n_tabs))))
 
 
-def _merge_similar_clusters(cluster_embeddings: List[np.ndarray], merge_thresh: float = 0.85) -> List[int]:
+def _merge_similar_clusters(
+    cluster_embeddings: List[np.ndarray], 
+    merge_thresh: float = CENTROID_MERGE_THRESH
+) -> List[int]:
     """
-    Merge similar cluster centroids based on cosine similarity threshold.
+    Merge similar cluster centroids using Union-Find algorithm.
 
+    Args:
+        cluster_embeddings: List of centroid vectors
+        merge_thresh: Cosine similarity threshold for merging (default 0.90)
+        
     Returns:
-        A list `mapping` of length N where mapping[i] = new_cluster_index for original centroid i.
+        List mapping original centroid index → merged cluster index
     """
     n = len(cluster_embeddings)
     if n <= 1:
         return list(range(n))
 
-    # Stack into (n, d)
-    cents = np.vstack(cluster_embeddings)
-    sim = cosine_similarity(cents, cents)
+    # Stack into (n, d) matrix
+    centroids = np.vstack(cluster_embeddings)
+    similarity_matrix = cosine_similarity(centroids, centroids)
 
+    # Union-Find data structure
     parent = list(range(n))
 
-    def find(x):
+    def find(x: int) -> int:
+        """Find root with path compression."""
         while parent[x] != x:
-            parent[x] = parent[parent[x]]
+            parent[x] = parent[parent[x]]  # Path compression
             x = parent[x]
         return x
 
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
+    def union(a: int, b: int) -> None:
+        """Union by rank (implicit via find order)."""
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
 
+    # Merge clusters above similarity threshold
     for i in range(n):
         for j in range(i + 1, n):
-            # symmetric matrix
-            if sim[i, j] >= merge_thresh:
+            if similarity_matrix[i, j] >= merge_thresh:
                 union(i, j)
 
-    # Map each root to a compact new index
-    mapping_root_to_new = {}
+    # Map each root to a compact sequential index
+    root_to_new_id = {}
     mapping = [0] * n
-    next_idx = 0
+    next_id = 0
+    
     for i in range(n):
-        r = find(i)
-        if r not in mapping_root_to_new:
-            mapping_root_to_new[r] = next_idx
-            next_idx += 1
-        mapping[i] = mapping_root_to_new[r]
+        root = find(i)
+        if root not in root_to_new_id:
+            root_to_new_id[root] = next_id
+            next_id += 1
+        mapping[i] = root_to_new_id[root]
 
     return mapping
 
 
 def cluster_tabs(tabs: List[dict], n_clusters: Optional[int] = None) -> List[dict]:
     """
-    Main clustering function that processes tabs and returns clustered groups.
-    Returns a list of dicts: {"id": int, "tabs": [ {title,url,url_norm,domain}, ... ] }
+    Main clustering function using hybrid KMeans + DBSCAN approach.
+    
+    Pipeline:
+    1. Preprocess and validate tabs
+    2. Generate semantic embeddings
+    3. Initial KMeans clustering
+    4. Merge similar clusters
+    5. Reassign small clusters to nearest neighbors
+    6. Group remaining singletons with DBSCAN
+    
+    Args:
+        tabs: List of dicts with 'title' and 'url' keys
+        n_clusters: Optional fixed cluster count (auto-determined if None)
+        
+    Returns:
+        List of cluster dicts: [{"id": int, "tabs": [...]}, ...]
+        
+    Raises:
+        ValueError: If tabs list is empty
+        RuntimeError: If embedding generation fails
     """
     if not tabs:
         raise ValueError("Tabs list cannot be empty")
 
-    # Preprocess tabs
+    # Preprocess tabs (filters invalid URLs)
     tabs_norm = preprocess_tabs(tabs)
-    texts = [f"{t['title']} {t['url_norm']}" for t in tabs_norm]
+    
+    if not tabs_norm:
+        return [{"id": MISC_CLUSTER_ID, "tabs": []}]
+    
+    # Generate embedding texts with clear separator
+    texts = [f"{t['title']} | {t['domain']}" for t in tabs_norm]
 
-    # Generate embeddings - defensive
+    # Generate embeddings with fallback handling
     try:
         embeddings = embedder.encode(texts, convert_to_numpy=True)
     except TypeError:
-        # Older/newer sentence-transformers variants might not support convert_to_numpy param
+        # Older sentence-transformers versions don't support convert_to_numpy
         embeddings = np.array(embedder.encode(texts))
     except Exception as e:
         raise RuntimeError(f"Embedding generation failed: {e}")
 
-    # Ensure 2-D array (N, D)
+    # Ensure 2-D array shape (N, D)
     embeddings = np.asarray(embeddings)
     if embeddings.ndim == 1:
         embeddings = embeddings.reshape(1, -1)
     if embeddings.ndim != 2:
-        raise RuntimeError("Unexpected embeddings shape, expected 2-D array")
+        raise RuntimeError(f"Unexpected embeddings shape: {embeddings.shape}")
 
-    # Decide number of clusters
+    # Auto-determine cluster count
     if n_clusters is None:
         n_clusters = _auto_n_clusters(len(tabs_norm))
 
-    # First-pass: KMeans clustering
-    # n_init=10 for sklearn compatibility
+    # Phase 1: KMeans clustering
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     labels = kmeans.fit_predict(embeddings)
 
-    # Group tab indices by KMeans cluster id
+    # Group tab indices by KMeans cluster ID
     clusters_by_label: Dict[int, List[int]] = {}
-    for idx, lab in enumerate(labels):
-        clusters_by_label.setdefault(int(lab), []).append(idx)
+    for idx, label in enumerate(labels):
+        clusters_by_label.setdefault(int(label), []).append(idx)
 
     # Compute centroids for each KMeans cluster
     centroid_list = []
     centroid_cluster_ids = []
-    for c_id, idxs in sorted(clusters_by_label.items()):
-        if not idxs:
+    for cluster_id, tab_indices in sorted(clusters_by_label.items()):
+        if not tab_indices:
             continue
-        cent = embeddings[idxs].mean(axis=0)
-        centroid_list.append(cent)
-        centroid_cluster_ids.append(c_id)
+        centroid = embeddings[tab_indices].mean(axis=0)
+        centroid_list.append(centroid)
+        centroid_cluster_ids.append(cluster_id)
 
-    # If no centroids (shouldn't happen), fallback
+    # Fallback if no valid clusters
     if not centroid_list:
-        # everything as misc
-        return [{"id": 9999, "tabs": [{"title": t["title"], "url": t["url"], "url_norm": t["url_norm"], "domain": t["domain"]} for t in tabs_norm]}]
+        return [{
+            "id": MISC_CLUSTER_ID, 
+            "tabs": [{"title": t["title"], "url": t["url"], 
+                     "url_norm": t["url_norm"], "domain": t["domain"]} 
+                    for t in tabs_norm]
+        }]
 
-    # Merge highly similar centroids
-    merge_map = _merge_similar_clusters(centroid_list, merge_thresh=0.90)  # mapping length == len(centroid_list)
+    # Phase 2: Merge highly similar clusters
+    merge_mapping = _merge_similar_clusters(centroid_list, CENTROID_MERGE_THRESH)
 
-    # Build mapping: merged_index -> list of original KMeans cluster ids
+    # Build mapping: merged_index -> list of original KMeans cluster IDs
     merged_clusters_map: Dict[int, List[int]] = {}
-    for orig_idx, merged_idx in enumerate(merge_map):
+    for orig_idx, merged_idx in enumerate(merge_mapping):
         kmeans_cluster_id = centroid_cluster_ids[orig_idx]
         merged_clusters_map.setdefault(merged_idx, []).append(kmeans_cluster_id)
 
-    # Build new clusters (keys are new sequential indices)
+    # Consolidate tab indices into new merged clusters
     new_clusters: Dict[int, List[int]] = {}
     for new_idx, orig_cluster_ids in sorted(merged_clusters_map.items()):
-        members: List[int] = []
-        for oc in orig_cluster_ids:
-            members.extend(clusters_by_label.get(oc, []))
-        new_clusters[new_idx] = members
+        tab_indices: List[int] = []
+        for orig_id in orig_cluster_ids:
+            tab_indices.extend(clusters_by_label.get(orig_id, []))
+        new_clusters[new_idx] = tab_indices
 
-    # Compute centroids for new clusters
+    # Compute centroids for merged clusters
     new_centroids = []
-    for idxs in new_clusters.values():
-        if not idxs:
-            # safety: skip empty
-            continue
-        new_centroids.append(embeddings[idxs].mean(axis=0))
+    for tab_indices in new_clusters.values():
+        new_centroids.append(embeddings[tab_indices].mean(axis=0))
+    
     if not new_centroids:
-        # fallback - put everything into misc
-        return [{"id": 9999, "tabs": [{"title": t["title"], "url": t["url"], "url_norm": t["url_norm"], "domain": t["domain"]} for t in tabs_norm]}]
-    new_centroids = np.vstack(new_centroids)
+        return [{
+            "id": MISC_CLUSTER_ID,
+            "tabs": [{"title": t["title"], "url": t["url"],
+                     "url_norm": t["url_norm"], "domain": t["domain"]}
+                    for t in tabs_norm]
+        }]
+    
+    new_centroids = np.array(new_centroids)
 
-    # Initialize final_clusters as enumeration of new_clusters.values() so ids are sequential
-    final_clusters: Dict[int, List[int]] = {i: list(idxs) for i, idxs in enumerate(new_clusters.values())}
+    # Initialize final clusters with sequential IDs
+    final_clusters: Dict[int, List[int]] = {
+        i: list(tab_indices) 
+        for i, tab_indices in enumerate(new_clusters.values())
+    }
 
-    # Reassign members of very small clusters to nearest cluster when similarity high enough
-    # We iterate over a static copy of items to avoid mutation during iteration issues.
-    for cid, idxs in list(final_clusters.items()):
-        if not idxs:
-            # skip empties
+    # Create mapping between cluster IDs and centroid indices
+    sorted_cluster_ids = sorted(final_clusters.keys())
+    cid_to_centroid_idx = {cid: idx for idx, cid in enumerate(sorted_cluster_ids)}
+
+    # Phase 3: Reassign small clusters to nearest neighbors
+    for cluster_id, tab_indices in list(final_clusters.items()):
+        if not tab_indices or len(tab_indices) >= MIN_CLUSTER_SIZE:
             continue
-        if len(idxs) < MIN_CLUSTER_SIZE:
-            # try to reassign each member individually
-            for tidx in idxs[:]:  # iterate on a copy
-                vec = embeddings[tidx].reshape(1, -1)
-                sims = cosine_similarity(vec, new_centroids)[0]
-                # Mark current cluster's similarity very low so it doesn't pick itself
-                if cid < len(sims):
-                    sims[cid] = -1.0
-                best_idx = int(np.argmax(sims))
-                if sims[best_idx] >= REASSIGN_SIMILARITY_THRESH:
-                    # move tidx to best cluster
-                    try:
-                        final_clusters[cid].remove(tidx)
-                    except ValueError:
-                        pass
-                    final_clusters.setdefault(best_idx, []).append(tidx)
-            # if cluster became empty, remove it
-            if not final_clusters[cid]:
-                final_clusters.pop(cid, None)
+        
+        # Try reassigning each tab individually
+        for tab_idx in tab_indices[:]:  # Iterate on copy
+            vec = embeddings[tab_idx].reshape(1, -1)
+            similarities = cosine_similarity(vec, new_centroids)[0]
+            
+            # Mask current cluster to avoid self-assignment
+            if cluster_id in cid_to_centroid_idx:
+                similarities[cid_to_centroid_idx[cluster_id]] = -1.0
+            
+            best_centroid_idx = int(np.argmax(similarities))
+            best_similarity = similarities[best_centroid_idx]
+            
+            if best_similarity >= REASSIGN_SIMILARITY_THRESH:
+                # Find cluster ID for best centroid
+                best_cluster_id = sorted_cluster_ids[best_centroid_idx]
+                
+                # Move tab to best cluster
+                try:
+                    final_clusters[cluster_id].remove(tab_idx)
+                except ValueError:
+                    pass
+                final_clusters.setdefault(best_cluster_id, []).append(tab_idx)
+        
+        # Remove empty clusters
+        if not final_clusters[cluster_id]:
+            final_clusters.pop(cluster_id, None)
 
-    # Collect singleton indices (tabs that are alone in their cluster) for optional DBSCAN grouping
-    singletons = [tidx for cid, idxs in final_clusters.items() for tidx in idxs if len(final_clusters.get(cid, [])) == 1]
+    # Phase 4: Group remaining singletons with DBSCAN
+    # Snapshot cluster sizes to avoid re-evaluation during iteration
+    cluster_sizes = {cid: len(tab_indices) for cid, tab_indices in final_clusters.items()}
+    singletons = [
+        tab_idx 
+        for cluster_id, tab_indices in final_clusters.items() 
+        for tab_idx in tab_indices 
+        if cluster_sizes[cluster_id] == 1
+    ]
+    
     if len(singletons) >= 2:
         try:
-            sub_emb = embeddings[singletons]
-            if sub_emb.shape[0] >= 2:
-                db = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES, metric="cosine").fit(sub_emb)
+            singleton_embeddings = embeddings[singletons]
+            if singleton_embeddings.shape[0] >= 2:
+                db = DBSCAN(
+                    eps=DBSCAN_EPS, 
+                    min_samples=DBSCAN_MIN_SAMPLES, 
+                    metric="cosine"
+                ).fit(singleton_embeddings)
+                
                 db_labels = db.labels_
-                # Map DBSCAN labels to new clusters starting from next available id
+                
+                # Map DBSCAN labels to new clusters
                 next_id = max(final_clusters.keys()) + 1 if final_clusters else 0
-                dbmap: Dict[int, List[int]] = {}
-                for i, lab in enumerate(db_labels):
-                    if lab == -1:
+                dbscan_clusters: Dict[int, List[int]] = {}
+                
+                for i, label in enumerate(db_labels):
+                    if label == -1:  # Noise point
                         continue
-                    dbmap.setdefault(int(lab), []).append(singletons[i])
+                    dbscan_clusters.setdefault(int(label), []).append(singletons[i])
+                
                 # Add DBSCAN-found groups
-                for lab, members in sorted(dbmap.items()):
+                for label, members in sorted(dbscan_clusters.items()):
                     final_clusters[next_id] = members
                     next_id += 1
-                # Remove db-mapped members from their previous singleton clusters
-                db_mapped = {m for members in dbmap.values() for m in members}
-                for cid in list(final_clusters.keys()):
-                    idxs = final_clusters.get(cid, [])
-                    if not idxs:
-                        continue
-                    # If cluster contains a db-mapped member and is a singleton, remove it
-                    if len(idxs) == 1 and idxs[0] in db_mapped:
-                        final_clusters.pop(cid, None)
-        except Exception:
-            # DBSCAN is optional — withstand failures gracefully
+                
+                # Remove old singleton clusters that were merged
+                db_mapped_tabs = {
+                    tab_idx 
+                    for members in dbscan_clusters.values() 
+                    for tab_idx in members
+                }
+                
+                clusters_to_remove = [
+                    cluster_id 
+                    for cluster_id, tab_indices in final_clusters.items()
+                    if len(tab_indices) == 1 and tab_indices[0] in db_mapped_tabs
+                ]
+                
+                for cluster_id in clusters_to_remove:
+                    final_clusters.pop(cluster_id, None)
+                    
+        except Exception as e:
+            # DBSCAN is optional enhancement - don't fail entire clustering
             pass
 
-    # Build final output with stable sequential IDs (0..N-1). Keep misc as 9999 if any leftovers.
+    # Phase 5: Build final output with sequential IDs
     output = []
-    assigned = set()
-    # Sort final_clusters by numeric key for determinism
-    for new_id in sorted(final_clusters.keys()):
-        idxs = [i for i in final_clusters[new_id] if i not in assigned]
-        if not idxs:
+    assigned_tabs = set()
+    
+    # Process regular clusters
+    for cluster_id in sorted(final_clusters.keys()):
+        tab_indices = [i for i in final_clusters[cluster_id] if i not in assigned_tabs]
+        if not tab_indices:
             continue
-        assigned.update(idxs)
+        
+        assigned_tabs.update(tab_indices)
         cluster_tabs = []
-        for i in idxs:
+        
+        for i in tab_indices:
             t = tabs_norm[i]
-            cluster_tabs.append({"title": t["title"], "url": t["url"], "url_norm": t["url_norm"], "domain": t["domain"]})
-        output.append({"id": int(new_id), "tabs": cluster_tabs})
+            cluster_tabs.append({
+                "title": t["title"], 
+                "url": t["url"], 
+                "url_norm": t["url_norm"], 
+                "domain": t["domain"]
+            })
+        
+        output.append({"id": int(cluster_id), "tabs": cluster_tabs})
 
-    # Any unassigned tabs -> put into Misc cluster id 9999
-    unassigned = [i for i in range(len(tabs_norm)) if i not in assigned]
-    if unassigned:
+    # Collect unassigned tabs into Miscellaneous cluster
+    unassigned_indices = [
+        i for i in range(len(tabs_norm)) 
+        if i not in assigned_tabs
+    ]
+    
+    if unassigned_indices:
         misc_tabs = []
-        for i in unassigned:
+        for i in unassigned_indices:
             t = tabs_norm[i]
-            misc_tabs.append({"title": t["title"], "url": t["url"], "url_norm": t["url_norm"], "domain": t["domain"]})
-        output.append({"id": 9999, "tabs": misc_tabs})
+            misc_tabs.append({
+                "title": t["title"], 
+                "url": t["url"], 
+                "url_norm": t["url_norm"], 
+                "domain": t["domain"]
+            })
+        output.append({"id": MISC_CLUSTER_ID, "tabs": misc_tabs})
 
-    # Deterministic ordering: non-misc clusters first (by id), misc last
-    output = sorted(output, key=lambda x: (x["id"] == 9999, x["id"]))
+    # Deterministic ordering: regular clusters first (by ID), misc last
+    output = sorted(output, key=lambda x: (x["id"] == MISC_CLUSTER_ID, x["id"]))
 
     return output
